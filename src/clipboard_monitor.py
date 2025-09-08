@@ -27,7 +27,9 @@ CLIP_DIR = BASE / "data" / "clipboard"
 ALLOWED_EXT = (".png", ".jpg", ".jpeg", ".bmp")
 
 def utc_now_iso():
-    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(timespec="milliseconds")
+    # Windows-safe UTC timestamp, no colons or plus signs
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+
 
 def ensure_dir():
     CLIP_DIR.mkdir(parents=True, exist_ok=True)

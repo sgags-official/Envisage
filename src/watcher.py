@@ -51,7 +51,9 @@ def configure_tesseract(cmd_from_env=None):
 
 
 def utc_now_iso():
-    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(timespec="milliseconds")
+    # Windows-safe UTC timestamp, no colons or plus signs
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+
 
 
 def wait_for_file_complete(path: Path, timeout=10.0, poll_interval=0.35):
