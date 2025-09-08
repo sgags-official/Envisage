@@ -1,0 +1,11 @@
+Make sure you have the following libraries downloaded
+
+watchdog
+pytesseract
+Pillow
+GitPython
+PyGithub
+requests
+beautifulsoup4
+python-dotenv
+markdown
