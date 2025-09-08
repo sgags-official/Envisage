@@ -1,5 +1,3 @@
-Make sure you have the following libraries downloaded
-
 watchdog
 pytesseract
 Pillow
