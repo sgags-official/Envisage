@@ -1,26 +1,36 @@
 #!/usr/bin/env python3
 """
 generate_index.py
-Scans data/notes/*.md and generates a small static site under site/,
-creating index.html and per-note HTML files.
+- parse notes metadata (frontmatter)
+- convert markdown to HTML per-note
+- build site/index.html with table of notes sorted by created_utc (newest first)
+- exposes generate_site(notes_dir=..., site_dir=...)
 """
 
-import re
 from pathlib import Path
-from datetime import datetime
-import argparse
+import re
 import html
+from datetime import datetime
 import markdown as md
+import argparse
+import logging
+
+LOG = logging.getLogger("envisage.generate")
+LOG.setLevel(logging.INFO)
+ch = logging.StreamHandler()
+ch.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s"))
+LOG.addHandler(ch)
 
 BASE = Path(__file__).resolve().parents[1]
 NOTES_DIR = BASE / "data" / "notes"
 SITE_DIR = BASE / "site"
-SITE_NOTES = SITE_DIR / "notes"
-VER = "ENVISAGE Day1 site generator v0.1"
+SITE_NOTES_DIR = SITE_DIR / "notes"
 
 FRONT_RE = re.compile(r"^---\s*(.*?)\s*---\s*", re.S)
 
-def parse_frontmatter(text):
+
+def parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Return (meta_dict, rest_text)."""
     m = FRONT_RE.match(text)
     meta = {}
     rest = text
@@ -33,26 +43,43 @@ def parse_frontmatter(text):
                 meta[k.strip()] = v.strip()
     return meta, rest
 
-def title_from_md(mdtext):
+
+def title_from_md(mdtext: str) -> str:
     for line in mdtext.splitlines():
         l = line.strip()
         if l.startswith("# "):
             return l[2:].strip()
-    # fallback to first non-empty line
+    # fallback first non-empty
     for line in mdtext.splitlines():
         if line.strip():
-            return line.strip()[:60]
+            return line.strip()[:80]
     return "Untitled"
+
 
 def ensure_dirs():
     SITE_DIR.mkdir(parents=True, exist_ok=True)
-    SITE_NOTES.mkdir(parents=True, exist_ok=True)
+    SITE_NOTES_DIR.mkdir(parents=True, exist_ok=True)
 
-def build_note_html(md_path: Path):
+
+def _parse_iso(dt_str: str):
+    try:
+        return datetime.fromisoformat(dt_str)
+    except Exception:
+        try:
+            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+
+def build_note_html(md_path: Path) -> dict:
     raw = md_path.read_text(encoding="utf-8")
     meta, body_md = parse_frontmatter(raw)
     title = meta.get("title") or title_from_md(body_md) or md_path.stem
     html_body = md.markdown(body_md)
+    created = meta.get("created_utc", "")
+    created_dt = _parse_iso(created) if created else None
+    out_name = md_path.stem + ".html"
+    out_path = SITE_NOTES_DIR / out_name
     note_html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -63,64 +90,97 @@ def build_note_html(md_path: Path):
 body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;max-width:900px;margin:2rem auto;padding:1rem}}
 header{{border-bottom:1px solid #eee;margin-bottom:1rem;padding-bottom:0.5rem}}
 pre,code{{background:#f5f5f5;padding:0.2rem 0.4rem;border-radius:4px}}
+.meta{{color:#444;font-size:0.9rem}}
 </style>
 </head>
 <body>
 <header>
 <h1>{html.escape(title)}</h1>
-<p><small>source: {html.escape(meta.get('source','-'))} • original file: {html.escape(meta.get('orig_filename','-'))} • timestamp_utc: {html.escape(meta.get('timestamp_utc','-'))}</small></p>
+<p class="meta">source: {html.escape(meta.get('source','-'))} • original: {html.escape(meta.get('orig_filename','-'))} • topics: {html.escape(meta.get('topics','-'))} • version: {html.escape(meta.get('version','-'))} • created_utc: {html.escape(created)}</p>
 </header>
-<main>
-{html_body}
-</main>
-<footer style="margin-top:2rem"><small>{VER} — generated {datetime.utcnow().isoformat()}Z</small></footer>
-</body>
-</html>
+<main>{html_body}</main>
+<footer style="margin-top:2rem"><small>ENVISAGE notes — generated {datetime.utcnow().isoformat()}Z</small></footer>
+</body></html>
 """
-    out_name = md_path.stem + ".html"
-    out_path = SITE_NOTES / out_name
     out_path.write_text(note_html, encoding="utf-8")
-    return {"title": title, "meta": meta, "path": f"notes/{out_name}", "src": md_path.name}
+    return {
+        "title": title,
+        "created_utc": created,
+        "created_dt": created_dt,
+        "source": meta.get("source", ""),
+        "topics": meta.get("topics", ""),
+        "version": meta.get("version", ""),
+        "path": f"notes/{out_name}",
+        "md_name": md_path.name
+    }
 
-def build_index(note_entries):
+
+def build_index(entries: list[dict]):
+    # Sort by created_dt (newest first). If no dt, put at the end.
+    entries_sorted = sorted(entries, key=lambda e: e["created_dt"] or datetime.min, reverse=True)
+
     rows = []
-    for e in sorted(note_entries, key=lambda x: x["meta"].get("timestamp_utc", ""), reverse=True):
-        ts = e["meta"].get("timestamp_utc", "")
-        rows.append(f'<li><a href="{e["path"]}">{html.escape(e["title"])}</a> — <small>{html.escape(ts)} — {html.escape(e["src"])}</small></li>')
+    for e in entries_sorted:
+        created = e["created_utc"] or ""
+        rows.append(
+            f"<tr>"
+            f"<td><a href=\"{e['path']}\">{html.escape(e['title'])}</a></td>"
+            f"<td>{html.escape(created)}</td>"
+            f"<td>{html.escape(e['source'])}</td>"
+            f"<td>{html.escape(e['topics'])}</td>"
+            f"<td>{html.escape(e['version'])}</td>"
+            f"<td>{html.escape(e['md_name'])}</td>"
+            f"</tr>"
+        )
+
     idx_html = f"""<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ENVISAGE Notes</title>
-<style>body{{font-family:system-ui;max-width:900px;margin:2rem auto}}li{{margin:0.6rem 0}}</style>
+<style>
+body{{font-family:system-ui;max-width:1100px;margin:2rem auto;padding:1rem}}
+table{{width:100%;border-collapse:collapse}}
+th,td{{text-align:left;padding:0.6rem;border-bottom:1px solid #eee}}
+th{{background:#fafafa}}
+</style>
 </head>
 <body>
 <h1>ENVISAGE — Notes</h1>
-<p>Auto-generated index of OCR notes.</p>
-<ul>
-{chr(10).join(rows)}
-</ul>
-<footer><small>{VER} — {datetime.utcnow().isoformat()}Z</small></footer>
+<p>Auto-generated index of OCR notes (sorted by newest first).</p>
+<table>
+<thead><tr><th>Title</th><th>Created (UTC)</th><th>Source</th><th>Topics</th><th>Ver</th><th>File</th></tr></thead>
+<tbody>
+{''.join(rows)}
+</tbody>
+</table>
+<footer><small>ENVISAGE — index generated {datetime.utcnow().isoformat()}Z</small></footer>
 </body></html>
 """
     (SITE_DIR / "index.html").write_text(idx_html, encoding="utf-8")
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--notes-dir", default=str(NOTES_DIR))
-    parser.add_argument("--site-dir", default=str(SITE_DIR))
-    args = parser.parse_args()
+def generate_site(notes_dir: str | None = None, site_dir: str | None = None):
+    notes_dir = Path(notes_dir) if notes_dir else NOTES_DIR
+    site_dir = Path(site_dir) if site_dir else SITE_DIR
+    global SITE_DIR, SITE_NOTES_DIR, NOTES_DIR
+    SITE_DIR = site_dir
+    SITE_NOTES_DIR = SITE_DIR / "notes"
+    NOTES_DIR = notes_dir
     ensure_dirs()
+
     entries = []
-    notes = sorted(Path(args.notes_dir).glob("*.md"))
-    for n in notes:
+    for md in sorted(NOTES_DIR.glob("*.md")):
         try:
-            info = build_note_html(n)
+            info = build_note_html(md)
             entries.append(info)
         except Exception as e:
-            print("Failed to build:", n, e)
+            LOG.exception("Failed to build note %s: %s", md, e)
     build_index(entries)
-    print("Site generated at:", SITE_DIR.resolve())
+    LOG.info("Site generated at: %s", SITE_DIR.resolve())
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--notes-dir")
+    parser.add_argument("--site-dir")
+    args = parser.parse_args()
+    generate_site(notes_dir=args.notes_dir, site_dir=args.site_dir)
