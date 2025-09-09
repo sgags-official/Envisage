@@ -161,7 +161,6 @@ th{{background:#fafafa}}
 def generate_site(notes_dir: str | None = None, site_dir: str | None = None):
     notes_dir = Path(notes_dir) if notes_dir else NOTES_DIR
     site_dir = Path(site_dir) if site_dir else SITE_DIR
-    global SITE_DIR, SITE_NOTES_DIR, NOTES_DIR
     SITE_DIR = site_dir
     SITE_NOTES_DIR = SITE_DIR / "notes"
     NOTES_DIR = notes_dir
